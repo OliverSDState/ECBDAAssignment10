@@ -1,7 +1,3 @@
-https://oliverprice.shinyapps.io/OliverPriceAssignmentTen/
-
-
-
 
 library(shiny)
 library(dplyr)
