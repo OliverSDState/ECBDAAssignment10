@@ -1,0 +1,188 @@
+https://oliverprice.shinyapps.io/OliverPriceAssignmentTen/
+
+
+
+
+library(shiny)
+library(dplyr)
+library(ggplot2)
+
+# Load data files
+accident_data <- read.csv(file.path("data", "accident.csv"))
+drugs_data <- read.csv(file.path("data", "drugs.csv"))
+
+# Define the User Interface
+ui <- fluidPage(
+  # Title panel with centered, bold header
+  titlePanel(h2("2021 Traffic Accident Fatality Data Visualization", align = "center", style = "color: #333; font-weight: bold;")),
+  
+  sidebarLayout(
+    # Sidebar with inputs for drug type, drugs found, and day selection
+    sidebarPanel(
+      selectInput("type", "Select Drug Type:", choices = c("All", unique(drugs_data$DRUGRESNAME))),
+      selectInput("drugs_found", "Drugs Found?", choices = c("All", "Only Positive")),
+      selectizeInput("day_of_week", "Select Day(s) of Week:", 
+                     choices = c("All", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"),
+                     multiple = TRUE, selected = NULL),
+      actionButton("reset", "Reset", icon = icon("undo")),  # Reset button to clear selections
+      width = 3
+    ),
+    
+    # Main panel with plot and table outputs
+    mainPanel(
+      uiOutput("plots", style = "padding-top: 20px;"),  # Dynamic plot output
+      hr(),
+      uiOutput("tables", style = "padding-top: 20px; font-size: 1em;"),  # Dynamic table output
+      width = 9
+    )
+  ),
+  
+  # Custom styling for UI elements
+  tags$head(
+    tags$style(HTML("
+      .well { background-color: #f5f5f5; }
+      .sidebar { font-size: 1.1em; }
+      .table { margin-top: 10px; border-collapse: collapse; width: 100%; }
+      .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+      .table th { background-color: #4CAF50; color: white; font-weight: bold; font-size: 1.1em; }
+      .table tr:nth-child(even){background-color: #f9f9f9;}
+      .table tr:hover {background-color: #ddd;}
+      h3 { color: #333; }
+      .btn { font-weight: bold; }
+      .selectize-input, .selectize-dropdown { font-size: 1.1em; }
+    "))
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+  
+  # Filter drugs data to exclude certain entries if "Only Positive" is selected
+  drugs_data_filtered <- reactive({
+    drugs_filtered <- drugs_data
+    if (input$drugs_found == "Only Positive") {
+      drugs_filtered <- drugs_filtered %>%
+        filter(!DRUGRESNAME %in% c("Test Not Given", "Tested, No Drugs Found/Negative", 
+                                   "Reported as Unknown if Tested for Drugs", "Other Drug", 
+                                   "Not Reported", "Test For Drug, Results Unknown", 
+                                   "Tested For Drugs, Drugs Found, Type unknown/Positive"))
+    }
+    drugs_filtered
+  })
+  
+  # Reset button to clear all selections and outputs
+  observeEvent(input$reset, {
+    updateSelectInput(session, "type", selected = "All")
+    updateSelectInput(session, "drugs_found", selected = "All")
+    updateSelectizeInput(session, "day_of_week", selected = character(0)) # Clear selected days
+    output$plots <- renderUI(NULL)  # Clear plots
+    output$tables <- renderUI(NULL)  # Clear tables
+  })
+  
+  # Observe changes in day selection and update plots and tables
+  observe({
+    # Filter data based on selected days
+    if ("All" %in% input$day_of_week) {
+      filtered_data <- accident_data
+    } else {
+      filtered_data <- accident_data %>%
+        filter(DAY_WEEKNAME %in% input$day_of_week)
+    }
+    
+    # Show a single plot/table for "All" or separate for each selected day
+    if ("All" %in% input$day_of_week && length(input$day_of_week) == 1) {
+      output$plots <- renderUI({ plotOutput(outputId = "plot_all") })
+      output$tables <- renderUI({ tableOutput(outputId = "table_all") })
+    } else {
+      output$plots <- renderUI({
+        plot_list <- lapply(input$day_of_week, function(day) {
+          plotOutput(outputId = paste0("plot_", day))
+        })
+        do.call(tagList, plot_list)
+      })
+      output$tables <- renderUI({
+        table_list <- lapply(input$day_of_week, function(day) {
+          tableOutput(outputId = paste0("table_", day))
+        })
+        do.call(tagList, table_list)
+      })
+    }
+    
+    # Plot and table for "All" days
+    if ("All" %in% input$day_of_week && length(input$day_of_week) == 1) {
+      output$plot_all <- renderPlot({
+        data_for_all <- filtered_data
+        drugs_accidents <- merge(data_for_all, drugs_data_filtered(), by = "ST_CASE")
+        if (input$type != "All") {
+          drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME == input$type)
+        }
+        top_drugs <- drugs_accidents %>% count(DRUGRESNAME) %>% arrange(desc(n)) %>% head(7) %>% pull(DRUGRESNAME)
+        drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME %in% top_drugs)
+        accident_counts <- drugs_accidents %>% count(DAY_WEEKNAME, DRUGRESNAME) %>% rename(Total_Accidents = n)
+        ggplot(accident_counts, aes(x = DAY_WEEKNAME, y = DRUGRESNAME, fill = Total_Accidents)) +
+          geom_tile(color = "white") +
+          labs(title = "Total Accidents by Drug Type (All Days)", x = "Day of the Week", y = "Drug Type") +
+          scale_fill_gradient(low = "#add8e6", high = "#ff4500") +
+          theme_minimal() +
+          theme(
+            plot.title = element_text(hjust = 0.5, face = "bold", size = 18, color = "#333"),
+            axis.title = element_text(face = "bold", size = 14),
+            axis.text = element_text(face = "bold", size = 12)
+          )
+      })
+      
+      output$table_all <- renderTable({
+        drugs_accidents <- merge(filtered_data, drugs_data_filtered(), by = "ST_CASE")
+        if (input$type != "All") {
+          drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME == input$type)
+        }
+        top_drugs <- drugs_accidents %>% count(DRUGRESNAME) %>% arrange(desc(n)) %>% head(7) %>% pull(DRUGRESNAME)
+        drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME %in% top_drugs)
+        drugs_summary <- drugs_accidents %>% count(DAY_WEEKNAME, DRUGRESNAME) %>% 
+          rename("Day of Week" = DAY_WEEKNAME, "Drug Type" = DRUGRESNAME, "Total Accidents" = n) %>% 
+          arrange(desc(`Total Accidents`))
+        drugs_summary
+      }, striped = TRUE, bordered = TRUE, hover = TRUE, align = "c", rownames = FALSE)
+    } else {
+      # Generate plots/tables for each selected day individually
+      lapply(input$day_of_week, function(day) {
+        data_for_day <- filtered_data %>% filter(DAY_WEEKNAME == day)
+        output[[paste0("plot_", day)]] <- renderPlot({
+          drugs_accidents <- merge(data_for_day, drugs_data_filtered(), by = "ST_CASE")
+          if (input$type != "All") {
+            drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME == input$type)
+          }
+          top_drugs <- drugs_accidents %>% count(DRUGRESNAME) %>% arrange(desc(n)) %>% head(7) %>% pull(DRUGRESNAME)
+          drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME %in% top_drugs)
+          accident_counts <- drugs_accidents %>% count(DAY_WEEKNAME, DRUGRESNAME) %>% rename(Total_Accidents = n)
+          ggplot(accident_counts, aes(x = DAY_WEEKNAME, y = DRUGRESNAME, fill = Total_Accidents)) +
+            geom_tile(color = "white") +
+            labs(title = paste("Total Accidents by Drug Type on", day), x = "Day of the Week", y = "Drug Type") +
+            scale_fill_gradient(low = "#add8e6", high = "#ff4500") +
+            theme_minimal() +
+            theme(
+              plot.title = element_text(hjust = 0.5, face = "bold", size = 18, color = "#333"),
+              axis.title = element_text(face = "bold", size = 14),
+              axis.text = element_text(face = "bold", size = 12)
+            )
+        })
+        
+        output[[paste0("table_", day)]] <- renderTable({
+          drugs_accidents <- merge(data_for_day, drugs_data_filtered(), by = "ST_CASE")
+          if (input$type != "All") {
+            drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME == input$type)
+          }
+          top_drugs <- drugs_accidents %>% count(DRUGRESNAME) %>% arrange(desc(n)) %>% head(7) %>% pull(DRUGRESNAME)
+          drugs_accidents <- drugs_accidents %>% filter(DRUGRESNAME %in% top_drugs)
+          drugs_summary <- drugs_accidents %>% count(DAY_WEEKNAME, DRUGRESNAME) %>% 
+            rename("Day of Week" = DAY_WEEKNAME, "Drug Type" = DRUGRESNAME, "Total Accidents" = n) %>% 
+            arrange(desc(`Total Accidents`))
+          drugs_summary
+        }, striped = TRUE, bordered = TRUE, hover = TRUE, align = "c", rownames = FALSE)
+      })
+    }
+  })
+}
+
+# Run the Shiny app
+shinyApp(ui = ui, server = server)
